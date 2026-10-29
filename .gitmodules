@@ -1,3 +1,3 @@
 [submodule "freertos-thejas32"]
 	path = freertos-thejas32
-	url = https://gitlab.com/riscv-vega/operating-systems/freertos-thejas32.git
+    url = https://github.com/adithyan846/freertos-thejas32.git
