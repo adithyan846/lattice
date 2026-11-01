@@ -1,0 +1,16 @@
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++14
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 100
+PointerAlignment: Right
+DerivePointerAlignment: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakBeforeBraces: Attach
+SortIncludes: false
+SpaceAfterCStyleCast: true
+IncludeBlocks: Preserve

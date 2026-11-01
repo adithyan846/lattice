@@ -1,0 +1,29 @@
+# Build outputs
+build/
+cmake-build-*/
+*.o
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+compile_commands.json
+
+# Logs and generated flight data
+logs/
+*.log
+*.ulg
+*.csv
+*.binlog
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*~

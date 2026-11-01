@@ -1,0 +1,40 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: |
+          cmake -S . -B build/host \
+            -DFREERTRTOS_BUILD_FIRMWARE=OFF \
+            -DFREERTRTOS_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build/host --parallel
+      - name: Test
+        run: ctest --test-dir build/host --output-on-failure
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Check formatting
+        run: |
+          find src boards os tests -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+            | xargs -0 clang-format --dry-run --Werror
+
+  message-generation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Regenerate uORB headers
+        run: |
+          python3 tools/msg_gen.py --input src/msg --output src/msg/generated
+          git diff --exit-code src/msg/generated

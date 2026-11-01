@@ -1,0 +1,31 @@
+#!/bin/sh
+# freertrtos boot script for the THEJAS32 reference board.
+#
+# This file is a design artefact for the scaffold: the shell commands below are
+# the intended boot sequence, not a working script yet.
+
+# Load board defaults, then any SD-card overrides.
+param load /fs/microsd/params.txt
+
+# Start the sensor bus and the estimator before any control loop.
+sensor start
+estimator start
+
+# Commander owns arming, mode changes and failsafe policy.
+commander start
+
+# Navigation and the mode manager consume the estimator output.
+navigator start
+flight_mode start
+
+# Control loops: position -> attitude -> rate -> mixer -> ESCs.
+mc_pos_control start
+mc_att_control start
+control_allocator start
+
+# Telemetry and logging are optional for flight but required for the GCS.
+mavlink start
+logger start
+
+# Register periodic tasks with the watchdog last.
+task_watchdog start

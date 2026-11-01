@@ -1,0 +1,30 @@
+menu "freertrtos"
+
+config FREERTRTOS_TICK_HZ
+	int "Kernel tick rate (Hz)"
+	default 1000
+	help
+	  Keep this at 1000 for the flight stack. Lower values reduce overhead
+	  but make the 1 kHz rate loop impossible without a hardware timer.
+
+config FREERTRTOS_HEAP_BYTES
+	int "FreeRTOS heap size (bytes)"
+	default 65536
+	help
+	  Heap for kernel objects and third-party libraries. Flight code should
+	  use static allocation; the heap is not a general-purpose allocator.
+
+config FREERTRTOS_USE_FPU
+	bool "Save/restore FPU context"
+	default n
+	help
+	  Must match the RISC-V port and the compiler ABI. Leave disabled for
+	  the first bring-up.
+
+config FREERTRTOS_WATCHDOG
+	bool "Enable the task watchdog"
+	default y
+	help
+	  Reset or failsafe when a flight task misses its deadline.
+
+endmenu

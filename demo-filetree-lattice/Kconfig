@@ -1,0 +1,41 @@
+mainmenu "Freertrtos Autopilot Configuration"
+
+config BOARD_THEJAS32
+	bool "THEJAS32 reference board"
+	default y
+	help
+	  Build the board support package for the THEJAS32 RISC-V target.
+
+config BOARD_SITL
+	bool "Software-in-the-loop board"
+	default n
+	help
+	  Build the host-side board shim used by SITL tests.
+
+config MODULE_MAVLINK
+	bool "MAVLink telemetry and GCS protocol"
+	default y
+	help
+	  Enable the MAVLink module. Required for Mission Planner / QGC
+	  telemetry, command handling and mission upload.
+
+config MODULE_LOGGER
+	bool "Flight logger"
+	default y
+	help
+	  Enable binary flight and mission logging.
+
+config MODULE_RC_INPUT
+	bool "RC input"
+	default y
+	help
+	  Enable SBUS/CRSF RC input and manual control.
+
+config FREERTRTOS_USE_FPU
+	bool "Use hardware floating point"
+	default n
+	help
+	  Enable the RISC-V FPU context in the freertrtos port. Keep disabled
+	  for the first bring-up unless the core and toolchain are known good.
+
+source "os/freertrtos/Kconfig"
