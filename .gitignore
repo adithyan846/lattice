@@ -1,0 +1,36 @@
+# Build directories
+build/
+freertos-thejas32/build/
+app/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+# Backup files
+*.bak
+*.bak2
+*~
+
+# Obsidian workspace state
+notes/.obsidian/workspace.json
+notes/.obsidian/workspace-mobile.json
+
+# Build artifacts
+build/
+*.elf
+*.bin
+*.hex
+*.dump
+*.map
+
+# Temporary files
+*.tmp
+*.log
+# Toolchain
+vega-tools/
+
+# Flash tool
+Desktop/vega-flasher/
+
