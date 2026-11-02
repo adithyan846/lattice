@@ -92,6 +92,8 @@ endef
 
 LATTICE_SRCS := $(foreach dir,$(LATTICE_DIRS), \
 				$(call rwildcard,$(LATTICE)/$(dir),*.c))
+LATTICE_INCLUDES := $(foreach dir,$(LATTICE_DIRS),-I$(ROOT)/$(dir)/include)
+LATTICE_INCLUDES += -I$(ROOT)/interfaces
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -135,6 +137,7 @@ OBJECTS := $(addprefix $(BUILD_DIR)/,$(C_SOURCES:.c=.o)) \
 # Include order matters: the BSP ships its own stdlib.h / printf which must
 # shadow newlib, exactly as the Eclipse build had them ordered.
 INCLUDES := \
+  -I$(LATTICE_INCLUDES) \
   -I$(FREERTOS_DIR) \
   -I$(DEMO) \
   -I$(FREERTOS_DIR)/Demo/Common/include \
