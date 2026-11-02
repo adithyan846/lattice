@@ -14,17 +14,12 @@
 //#include <FreeRTOS.h>
 //#include <task.h>
 /* thejas64 includes. */
-#include "uart.h"
-
-#include "gpio.h"
-#include "led.h"
+#include "board.h"
+#include "hal_gpio.h"
+#include "hal_timer.h"
+#include "hal_uart.h"
 #include "stdlib.h"
-
-#include "adc.h"
-#include "i2c.h"
-#include "interrupt.h"
-#include "spi.h"
-#include "at25sf161.h"
+#include "led.h"
 #include "timer.h"
 
 ////////////////////////////////////////////////////////////
@@ -106,39 +101,20 @@ vToggleLED (void);
 int
 main (void)
 {
-  prvSetupHardware ();
-  vSendString ("Thejas32 FreeRTOS Demo\n\r");
+  /* Bare BSP + printf blink to debug UART. No FreeRTOS, no HAL. */
+  GPIO_write_pin (24, OFF_LED);
 
-  if (xTaskCreate (TestTask1, "Reg1", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL))
-    {
-        vSendString ("TASK 1 Created \n\r");
-    }
-
-  if (xTaskCreate (TestTask2, "Reg2", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL))
-    {
-        vSendString ("TASK 2 Created \n\r");
-    }
-
-  if (xTaskCreate (TestTask3, "Reg3", configMINIMAL_STACK_SIZE, NULL, mainCHECK_TASK_PRIORITY, NULL))
-    {
-        vSendString ("TASK 3 Created \n\r");
-    }
-
-  /* Blink RGB LED red on GPIO pin 24 using polled delay (no scheduler tick needed) */
   while (1)
     {
       GPIO_write_pin (24, ON_LED);
-      printf ("LED ON\n\r");
+      printf ("LED ON  1\n\r");
       timer_put_delay (TIMER_0, SYSTEM_FREQUENCY / 2);
 
       GPIO_write_pin (24, OFF_LED);
-      printf ("LED OFF\n\r");
+      printf ("LED OFF  2\n\r");
       timer_put_delay (TIMER_0, SYSTEM_FREQUENCY / 2);
     }
 
-  /* Start the scheduler. */
-  printf("hiii %d", 5);
-  vTaskStartScheduler ();
   for (;;)
     ;
 }

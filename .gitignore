@@ -4,6 +4,7 @@ freertos-thejas32/build/
 app/build/
 
 # IDE
+.kilo
 .vscode/
 .idea/
 *.swp

@@ -82,7 +82,8 @@ LATTICE_DIRS := \
 				devices \
 				interfaces \
 			    hal \
-				utils
+				utils \
+				platform
 
 define rwildcard
 $(foreach d,$(wildcard $(1)/*), \
@@ -94,6 +95,7 @@ LATTICE_SRCS := $(foreach dir,$(LATTICE_DIRS), \
 				$(call rwildcard,$(LATTICE)/$(dir),*.c))
 LATTICE_INCLUDES := $(foreach dir,$(LATTICE_DIRS),-I$(ROOT)/$(dir)/include)
 LATTICE_INCLUDES += -I$(ROOT)/interfaces
+LATTICE_INCLUDES += -I$(ROOT)/platform/thejas32 -I$(ROOT)/platform/thejas32/board
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
