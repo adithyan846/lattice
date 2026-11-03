@@ -7,7 +7,7 @@ created: 2026-11-02
 updated: 2026-11-02
 ---
 
-# Makefile Audit + Proposed HAL/OS Architecture
+# Makefile Audit + Proposed HAL/OS Architecture1
 
 > Audit of the root `Makefile` changes and the proposed HAL/RTOS abstraction layer architecture for Lattice.
 

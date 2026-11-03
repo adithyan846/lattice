@@ -101,18 +101,24 @@ vToggleLED (void);
 int
 main (void)
 {
-  /* Bare BSP + printf blink to debug UART. No FreeRTOS, no HAL. */
-  GPIO_write_pin (24, OFF_LED);
+  /* Full HAL test: GPIO + UART + Timer */
+  hal_gpio_init();
+  board_init();
+  
+  hal_uart_config_t ucfg = { .baud_rate = 115200, .data_bits = 8, .stop_bits = 1, .parity = false };
+  hal_uart_init(HAL_UART_0, &ucfg);
+
+  hal_gpio_write(BOARD_LED_RED_PIN, HAL_GPIO_LEVEL_LOW);
 
   while (1)
     {
-      GPIO_write_pin (24, ON_LED);
-      printf ("LED ON  1\n\r");
-      timer_put_delay (TIMER_0, SYSTEM_FREQUENCY / 2);
+      hal_gpio_write(BOARD_LED_RED_PIN, HAL_GPIO_LEVEL_HIGH);
+      hal_uart_write(HAL_UART_0, (const uint8_t *)"LED ON\n\r", 8);
+      hal_timer_delay_ms(500);
 
-      GPIO_write_pin (24, OFF_LED);
-      printf ("LED OFF  2\n\r");
-      timer_put_delay (TIMER_0, SYSTEM_FREQUENCY / 2);
+      hal_gpio_write(BOARD_LED_RED_PIN, HAL_GPIO_LEVEL_LOW);
+      hal_uart_write(HAL_UART_0, (const uint8_t *)"LED OFF\n\r", 9);
+      hal_timer_delay_ms(500);
     }
 
   for (;;)

@@ -5,7 +5,7 @@
 int hal_uart_init(hal_uart_t uart, const hal_uart_config_t *config) {
     (void)config;
     if (uart != HAL_UART_0) return -ENOTSUP;
-    init_uart();
+    /* UART_0 already initialized by bootloader at 115200; do not re-init */
     return 0;
 }
 
