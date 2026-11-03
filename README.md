@@ -12,15 +12,25 @@ cd lattice
 # 2. Initialize (if not cloned with --recurse-submodules)
 make init
 
-# 3. Build FreeRTOS demo
+# 3. Build FreeRTOS demo (bare-metal SPI HAL)
 make
 
-# 4. Flash to board
+# 4. Build with FreeRTOS SPI HAL (mutex + timeout)
+make WITH_FREERTOS=1
+
+# 5. Flash to board
 make flash
 
-# 5. Open serial monitor (Ctrl-A Ctrl-Q to quit)
+# 6. Open serial monitor (Ctrl-A Ctrl-Q to quit)
 make monitor
 ```
+
+## Build Modes
+
+| Mode | Command | SPI HAL | RAM | FreeRTOS |
+|------|---------|---------|-----|----------|
+| **Bare-metal** (default) | `make` | `spi_baremetal.c` | 68 KB | ❌ |
+| **FreeRTOS** | `make WITH_FREERTOS=1` | `spi_freertos.c` | 90 KB | ✅ Mutex + timeout |
 
 ## Build Your Own App
 
@@ -28,8 +38,11 @@ make monitor
 # Edit your code
 vim app/src/main.c
 
-# Build app (links against pre-built FreeRTOS kernel)
+# Build app (bare-metal SPI)
 make app
+
+# Build app with FreeRTOS SPI
+make WITH_FREERTOS=1 app
 
 # Flash your app
 make flash-app
@@ -38,35 +51,56 @@ make flash-app
 make monitor
 ```
 
-## All Available APIs in `app/src/`
+## HAL APIs in `hal/include/`
 
-| Category | Headers | Examples |
-|----------|---------|----------|
-| **FreeRTOS Kernel** | `FreeRTOS.h`, `task.h`, `queue.h`, `semphr.h`, `timers.h`, `event_groups.h`, `stream_buffer.h`, `list.h`, `croutine.h` | `xTaskCreate`, `xQueueCreate`, `xSemaphoreCreateMutex`, `xTimerCreate`, `xEventGroupCreate`, `xStreamBufferCreate` |
-| **Debug UART** | `debug_uart.h` | `init_uart()`, `Transmit_uart()`, `tx_uart()`, `rx_uart()`, `get_hex()`, `get_decimal()` |
-| **UART Driver** | `uart.h` | `uart_init()`, `uart_putchar()`, `uart_getchar()`, `uart_configure()`, `uart_intr_enable()` |
-| **GPIO** | `gpio.h` | `gpio_init()`, `gpio_set()`, `gpio_clear()`, `gpio_toggle()`, `gpio_read()`, `gpio_config()` |
-| **LED** | `led.h` | `led_init()`, `vToggleLED()`, `led_on()`, `led_off()` |
-| **I2C** | `i2c.h` | `i2c_init()`, `i2c_write()`, `i2c_read()`, `i2c_write_read()` |
-| **SPI** | `spi.h` | `spi_init()`, `spi_transfer()`, `spi_write()`, `spi_read()` |
-| **Timer** | `timer.h` | `timer_init()`, `timer_start()`, `timer_stop()`, `timer_get_count()` |
-| **Interrupt** | `interrupt.h` | `interrupt_enable()`, `interrupt_disable()`, `interrupt_configure()`, `enable_irq()`, `disable_irq()` |
-| **PWM** | `pwmc.h` | `pwmc_init()`, `pwmc_set_duty()`, `pwmc_set_period()`, `pwmc_start()`, `pwmc_stop()` |
-| **ADC** | `adc.h` | `adc_init()`, `adc_read()`, `adc_config_channel()` |
-| **QSPI** | `qspi.h` | `qspi_init()`, `qspi_read()`, `qspi_write()`, `qspi_erase()` |
-| **Flash** | `at25sf161.h` | `at25sf161_init()`, `at25sf161_read()`, `at25sf161_write()`, `at25sf161_erase()` |
+| Category | Header | Key Functions |
+|----------|--------|---------------|
+| **SPI** | `hal_spi.h` | `hal_spi_init`, `hal_spi_transfer`, `hal_spi_write_read`, `hal_spi_write`, `hal_spi_read`, `hal_spi_set_cs`, `hal_spi_set_baud_div`, `hal_spi_set_mode`, `hal_spi_check_overrun` |
+| **GPIO** | `hal_gpio.h` | `hal_gpio_init`, `hal_gpio_write`, `hal_gpio_read`, `hal_gpio_toggle`, `hal_gpio_set_dir` |
+| **UART** | `hal_uart.h` | `hal_uart_init`, `hal_uart_write`, `hal_uart_read`, `hal_uart_deinit` |
+| **Timer** | `hal_timer.h` | `hal_timer_delay_ms` |
+| **FreeRTOS Kernel** | `FreeRTOS.h`, `task.h`, `queue.h`, `semphr.h`, `timers.h`, `event_groups.h`, `stream_buffer.h` | `xTaskCreate`, `xQueueCreate`, `xSemaphoreCreateMutex`, `xTimerCreate`, `xEventGroupCreate`, `xStreamBufferCreate` |
+
+## SPI HAL — Key Features
+
+```c
+// Config (both builds)
+typedef enum { HAL_SPI_BAUD_DIV_4, ..., HAL_SPI_BAUD_DIV_2048 } hal_spi_baud_div_t;
+typedef enum { HAL_SPI_CS_MODE_CSAAT, HAL_SPI_CS_MODE_GPIO, HAL_SPI_CS_MODE_NONE } hal_spi_cs_mode_t;
+
+typedef struct {
+    hal_spi_mode_t       mode;
+    hal_spi_bit_order_t  bit_order;
+    hal_spi_cs_mode_t    cs_mode;
+    union { uint8_t gpio_pin; hal_spi_cs_hw_t hw_cs; };
+    uint32_t             freq_hz;       // 0 = use baud_div
+    hal_spi_baud_div_t   baud_div;      // Explicit divider
+    uint8_t              word_size;     // 8 only
+} hal_spi_config_t;
+
+// All blocking calls accept timeout_ms (0 = infinite)
+int hal_spi_init(hal_spi_bus_t bus, const hal_spi_config_t *config);
+int hal_spi_transfer(hal_spi_bus_t bus, const uint8_t *tx, uint8_t *rx, uint32_t len, uint32_t timeout_ms);
+int hal_spi_write_read(hal_spi_bus_t bus, const uint8_t *tx, uint32_t tx_len, uint8_t *rx, uint32_t rx_len, uint32_t timeout_ms);
+int hal_spi_write(hal_spi_bus_t bus, const uint8_t *data, uint32_t len, uint32_t timeout_ms);
+int hal_spi_read(hal_spi_bus_t bus, uint8_t *data, uint32_t len, uint32_t timeout_ms);
+int hal_spi_set_cs(hal_spi_bus_t bus, bool assert);
+int hal_spi_set_baud_div(hal_spi_bus_t bus, hal_spi_baud_div_t div);
+int hal_spi_set_mode(hal_spi_bus_t bus, hal_spi_mode_t mode);
+int hal_spi_check_overrun(hal_spi_bus_t bus);
+```
 
 ## Make Targets
 
 | Command | Description |
 |---------|-------------|
-| `make` / `make demo` | Build FreeRTOS demo (RTOSDemo.elf/bin/hex) |
+| `make` / `make demo` | Build FreeRTOS demo (bare-metal SPI) |
+| `make WITH_FREERTOS=1` | Build with FreeRTOS SPI HAL (mutex + timeout) |
 | `make app` | Build your app from `app/src/` |
-| `make flash` | Flash demo binary via xmodem |
-| `make flash-app` | Flash your app binary via xmodem |
+| `make WITH_FREERTOS=1 app` | Build app with FreeRTOS SPI HAL |
+| `make flash` / `make flash-app` | Flash via xmodem |
 | `make monitor` | Open picocom serial console |
-| `make size` | Show demo memory usage |
-| `make size-app` | Show app memory usage |
+| `make size` / `make size-app` | Show memory usage |
 | `make clean` | Remove all build artifacts |
 | `make info` | Show build configuration |
 | `make help` | Show all targets |
@@ -78,13 +112,54 @@ make monitor
 make VEGA_TOOLS=/opt/vega-tools
 make TOOLCHAIN_BIN=/opt/vega-tools/bin
 
+# Build mode
+make                    # Bare-metal SPI HAL
+make WITH_FREERTOS=1    # FreeRTOS SPI HAL (mutex + timeout)
+
 # Serial/flasher
 make SERIAL=/dev/ttyACM0
 make FLASHER=/usr/local/bin/xmodemflasher
 
 # Build type
-make OPT=-O2          # Release
-make OPT="-Og -g"     # Debug (default)
+make OPT=-O2            # Release
+make OPT="-Og -g"       # Debug (default)
+```
+
+## Project Structure
+
+```
+lattice/
+├── freertos-thejas32/              # FreeRTOS port (git submodule)
+│   ├── FreeRTOS_Source/            # Kernel source
+│   └── Demo/RISCV_CDAC_THEJAS32/   # Demo + VEGA BSP
+├── app/
+│   └── src/                        # YOUR CODE HERE
+│       └── main.c                  # Entry point
+├── hal/
+│   └── include/                    # Portable HAL headers
+│       ├── hal_spi.h
+│       ├── hal_gpio.h
+│       ├── hal_uart.h
+│       └── hal_timer.h
+├── platform/thejas32/
+│   ├── spi_baremetal.c             # SPI HAL (no RTOS)
+│   ├── spi_freertos.c              # SPI HAL (FreeRTOS mutex + timeout)
+│   ├── gpio.c
+│   ├── uart.c
+│   ├── timer.c
+│   └── board/
+├── notes/
+│   └── embedded/spi/               # SPI HAL documentation
+│       ├── 01-bsp-structure.md
+│       ├── 02-thejas32-spi-hardware.md
+│       ├── 03-vega-bsp-implementation.md
+│       ├── 04-hal-design.md
+│       ├── 05-platform-implementation.md
+│       ├── debugging-report.md
+│       ├── freertos-rationale.md
+│       └── hal-bsp-analysis.md
+├── Makefile                        # Single build script
+└── README.md
 ```
 
 ## Requirements
@@ -105,32 +180,18 @@ make OPT="-Og -g"     # Debug (default)
 4. **picocom** (for monitor)
    - `sudo apt install picocom`
 
-## Project Structure
-
-```
-lattice/
-├── freertos-thejas32/          # FreeRTOS port (git submodule)
-│   ├── FreeRTOS_Source/        # Kernel source
-│   └── Demo/RISCV_CDAC_THEJAS32/  # Demo + HAL/BSP
-├── app/
-│   └── src/                    # YOUR CODE HERE
-│       └── main.c              # Entry point
-├── Makefile                    # Single build script (this is it)
-└── README.md
-```
-
 ## Reproducing on Another Machine
 
 ```bash
 git clone --recurse-submodules <repo>
 cd lattice
 make init        # Only if submodules not cloned
-make             # Build demo
+make             # Build demo (bare-metal SPI)
 make flash       # Flash
 make monitor     # See output
 ```
 
-That's it. One Makefile, standard tools, all APIs available.
+That's it. One Makefile, standard tools, portable HAL.
 
 ## License
 

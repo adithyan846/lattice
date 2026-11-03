@@ -19,6 +19,15 @@
 # ============================================================================
 
 # ---------------------------------------------------------------------------
+# Build mode selection
+# ---------------------------------------------------------------------------
+WITH_FREERTOS ?= 0
+
+ifeq ($(WITH_FREERTOS),1)
+    CFLAGS += -DWITH_FREERTOS
+endif
+
+# ---------------------------------------------------------------------------
 # Board / toolchain selection
 # ---------------------------------------------------------------------------
 TARGET            ?= THEJAS32
@@ -74,28 +83,55 @@ FREERTOS    := $(FREERTOS_DIR)/FreeRTOS_Source
 
 CHIP_EXT    := $(FREERTOS)/portable/GCC/RISC-V/chip_specific_extensions/VEGA-THEJA32-ARIES
 
-#Lattice specific
-LATTICE := $(ROOT)
-LATTICE_DIRS := \
-				app \
-				core \
-				devices \
-				interfaces \
-			    hal \
-				utils \
-				platform
+# Explicit Lattice sources (using wildcard function for subdirs)
+LATTICE_SRCS := \
+	app/src/main.c \
+	$(wildcard core/*.c) \
+	$(wildcard devices/*.c) \
+	$(wildcard interfaces/*.c) \
+	$(wildcard hal/*.c) \
+	$(wildcard utils/*.c) \
+	platform/thejas32/board/board.c \
+	platform/thejas32/gpio.c \
+	platform/thejas32/timer.c \
+	platform/thejas32/uart.c
 
-define rwildcard
-$(foreach d,$(wildcard $(1)/*), \
-	$(call rwildcard,$(d),$(2))) \
-	$(wildcard $(1)/$(2))
-endef
+# Select SPI HAL based on build mode
+ifeq ($(WITH_FREERTOS),1)
+    LATTICE_SRCS += platform/thejas32/spi_freertos.c
+else
+    LATTICE_SRCS += platform/thejas32/spi_baremetal.c
+endif
 
-LATTICE_SRCS := $(foreach dir,$(LATTICE_DIRS), \
-				$(call rwildcard,$(LATTICE)/$(dir),*.c))
-LATTICE_INCLUDES := $(foreach dir,$(LATTICE_DIRS),-I$(ROOT)/$(dir)/include)
-LATTICE_INCLUDES += -I$(ROOT)/interfaces
-LATTICE_INCLUDES += -I$(ROOT)/platform/thejas32 -I$(ROOT)/platform/thejas32/board
+LATTICE_INCLUDES := \
+	-I$(ROOT)/app/include \
+	-I$(ROOT)/core/include \
+	-I$(ROOT)/devices/include \
+	-I$(ROOT)/interfaces/include \
+	-I$(ROOT)/hal/include \
+	-I$(ROOT)/utils/include \
+	-I$(ROOT)/platform/thejas32 \
+	-I$(ROOT)/platform/thejas32/board
+
+# OLD: Unused rwildcard and LATTICE_DIRS approach (commented out)
+# define rwildcard
+# $(foreach d,$(wildcard $(1)/*), \
+# 	$(call rwildcard,$(d),$(2))) \
+# 	$(wildcard $(1)/$(2))
+# endef
+#
+# LATTICE_DIRS := \
+# 				app \
+# 				core \
+# 				devices \
+# 				interfaces \
+# 			    hal \
+# 				utils \
+# 				platform
+#
+# LATTICE_SRCS := $(foreach dir,$(LATTICE_DIRS), \
+# 			$(call rwildcard,$(LATTICE)/$(dir),*.c))
+
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
@@ -358,7 +394,8 @@ info:
 	@echo "ASM sources   : $(words $(ASM_SOURCES))"
 
 help:
-	@echo "make            build the firmware"
+	@echo "make            build the firmware (bare-metal SPI HAL)"
+	@echo "make WITH_FREERTOS=1  build with FreeRTOS SPI HAL (mutex + timeout)"
 	@echo "make clean      remove build artefacts"
 	@echo "make flash      upload the .bin to the ARIES board over xmodem"
 	@echo "make run        build + flash"
