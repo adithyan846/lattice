@@ -20,6 +20,7 @@ created: 2026-11-01
 - [[API Reference]]
 - [[LED Blinking]]
 - [[Makefile Audit + Proposed HAL-OS Architecture]]
+- [[Sensor Architecture]]
 
 ## Project Structure
 
@@ -50,6 +51,6 @@ lattice/
 
 Use [[Double Bracket Links]] to navigate between notes. The Obsidian Graph View will show connections between:
 
-- [[Developer Notes]] → [[Architecture Details]] → [[Makefile Evolution]] → [[Flash Workflow]] → [[API Reference]] → [[LED Blinking]] → [[Makefile Audit + Proposed HAL-OS Architecture]]
+- [[Developer Notes]] → [[Architecture Details]] → [[Makefile Evolution]] → [[Flash Workflow]] → [[API Reference]] → [[LED Blinking]] → [[Makefile Audit + Proposed HAL-OS Architecture]] → [[Sensor Architecture]]
 
 All notes link back to [[_index.md]].
