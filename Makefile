@@ -106,8 +106,8 @@ endif
 LATTICE_INCLUDES := \
 	-I$(ROOT)/app/include \
 	-I$(ROOT)/core/include \
-	-I$(ROOT)/devices/include \
-	-I$(ROOT)/interfaces/include \
+	-I$(ROOT)/devices/bmp280 \
+	-I$(ROOT)/interfaces/barometer \
 	-I$(ROOT)/hal/include \
 	-I$(ROOT)/utils/include \
 	-I$(ROOT)/platform/thejas32 \
@@ -151,6 +151,8 @@ C_SOURCES := \
   $(BSP)/drivers/timer/timer.c \
   $(BSP)/drivers/uart/debug_uart.c \
   $(BSP)/drivers/uart/uart.c \
+  $(ROOT)/interfaces/barometer/barometer.c \
+  $(ROOT)/devices/bmp280/bmp280.c \
   $(FREERTOS)/tasks.c \
   $(FREERTOS)/list.c \
   $(FREERTOS)/queue.c \
