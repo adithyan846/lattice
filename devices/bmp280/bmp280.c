@@ -1,7 +1,6 @@
-
 /***********************************************************************************
  * FILE ID         : bmp280.c
- * VERSION         : 1.0.0
+ * VERSION         : 1.1.0
  * PROJECT         : LATTICE - ARIES V3
  * DESCRIPTION     : BMP280 SPI device driver for THEJAS32
  *
@@ -12,6 +11,19 @@
  *   - Raw pressure and temperature acquisition
  *   - BMP280 calibration compensation
  *   - Publishing measurements through barometer interface
+ *
+ * Hardware notes (from bring-up on ARIES v3, see ~/drivers/test-lattice/baro):
+ *   - Some BMP280 modules do not return long auto-increment bursts correctly:
+ *     the first bytes are fine and the rest read 0x00, which collapses every
+ *     compensated value to zero.  Every register is therefore read with its
+ *     own single-byte transaction.
+ *   - Soft-float on this toolchain returns wrong, non-repeatable results and
+ *     64-bit division (__divdi3) misbehaves.  The driver therefore uses
+ *     integers only: 64-bit values are multiplied and shifted, never divided.
+ *
+ * Based on:
+ *   ebrezadev/BMP280-Barometric-Pressure-and-Temperature-Sensor-C-Driver
+ *   MIT License, Copyright (c) 2025 Reza G. Ebrahimi
  *
  * NOTE:
  *   SPI peripheral configuration must be performed by the platform layer
@@ -26,6 +38,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <limits.h>
 
 /* ============================================================================
@@ -44,6 +57,8 @@
 #define BMP280_REG_PRESS_MSB        0xF7
 #define BMP280_REG_TEMP_MSB         0xFA
 
+#define BMP280_CALIB_LEN            24U
+
 #define BMP280_STATUS_MEASURING     (1U << 3)
 
 #define BMP280_SPI_READ             0x80
@@ -54,17 +69,22 @@
  * ========================================================================== */
 
 #define BMP280_RESET_DELAY_MS       10
-#define BMP280_MEASURE_DELAY_MS     10
-#define BMP280_POLL_TIMEOUT_MS      50
-#define BMP280_POLL_PERIOD_MS       2
+
+/*
+ * Wait for the conversion even if the status bit cannot be read correctly.
+ * With temperature x2 and pressure x16 a forced conversion takes ~43 ms.
+ */
+#define BMP280_MEASURE_DELAY_MS     50
+#define BMP280_POLL_TIMEOUT_MS      100
+#define BMP280_POLL_PERIOD_MS       1
 
 /* ============================================================================
  * SENSOR CONFIGURATION
  * ========================================================================== */
 
-#define BMP280_OSRS_T               0x02
-#define BMP280_OSRS_P               0x05
-#define BMP280_IIR_FILTER           0x04
+#define BMP280_OSRS_T               0x02    /* temperature oversampling x2  */
+#define BMP280_OSRS_P               0x05    /* pressure oversampling x16    */
+#define BMP280_IIR_FILTER           0x04    /* IIR filter x16               */
 
 #define BMP280_CTRL_MEAS_FORCED \
     ((BMP280_OSRS_T << 5) | (BMP280_OSRS_P << 2) | 0x01)
@@ -75,15 +95,7 @@
 #define BMP280_CONFIG_VALUE \
     (BMP280_IIR_FILTER << 2)
 
-/* ============================================================================
- * SPI CONFIGURATION
- *
- * SPI peripheral configuration is owned by the platform layer.
- * These definitions identify the SPI peripheral used by this device.
- * ========================================================================== */
-
-#define BARO_SPI_BUS                HAL_SPI_BUS_2
-#define BARO_TIMEOUT_MS             100
+#define BMP280_SPI_TIMEOUT_MS       100
 
 /* ============================================================================
  * DEVICE DATA STRUCTURES
@@ -123,10 +135,14 @@ typedef struct
 
 typedef struct
 {
+    hal_spi_bus_t bus;
+
     int32_t t_fine;
 
     int32_t last_temp_centi;
     uint32_t last_pressure_pa;
+
+    uint8_t chip_id;
 
     bmp280_calib_t calib;
 
@@ -157,26 +173,50 @@ static void delay_ms(uint32_t ms)
  * ========================================================================== */
 
 /*
- * Read one or more BMP280 registers.
+ * Read one BMP280 register.
  *
  * The BMP280 SPI read command requires bit 7 to be set.
  */
 
-static int bmp280_read_regs(uint8_t reg, uint8_t *buf, uint8_t len)
+static int bmp280_read_reg(bmp280_dev_t *dev, uint8_t reg, uint8_t *value)
 {
-    if (buf == NULL || len == 0)
-        return -1;
-
     uint8_t cmd = reg | BMP280_SPI_READ;
 
-    return hal_spi_write_read(
-        BARO_SPI_BUS,
-        &cmd,
-        1,
-        buf,
-        len,
-        BARO_TIMEOUT_MS
-    );
+    if (hal_spi_write_read(
+            dev->bus,
+            &cmd,
+            1,
+            value,
+            1,
+            BMP280_SPI_TIMEOUT_MS) != 0)
+    {
+        return BMP280_ERR_BUS;
+    }
+
+    return BMP280_OK;
+}
+
+
+/*
+ * Read consecutive BMP280 registers, one transaction per register.
+ *
+ * Deliberately avoids auto-increment bursts (see file header).
+ */
+
+static int bmp280_read_regs(bmp280_dev_t *dev, uint8_t reg, uint8_t *buf, uint8_t len)
+{
+    if (buf == NULL || len == 0)
+        return BMP280_ERR_BUS;
+
+    for (uint8_t i = 0; i < len; i++)
+    {
+        int ret = bmp280_read_reg(dev, (uint8_t)(reg + i), &buf[i]);
+
+        if (ret != BMP280_OK)
+            return ret;
+    }
+
+    return BMP280_OK;
 }
 
 
@@ -186,7 +226,7 @@ static int bmp280_read_regs(uint8_t reg, uint8_t *buf, uint8_t len)
  * The BMP280 SPI write command requires bit 7 to be cleared.
  */
 
-static int bmp280_write_reg(uint8_t reg, uint8_t value)
+static int bmp280_write_reg(bmp280_dev_t *dev, uint8_t reg, uint8_t value)
 {
     uint8_t tx[2] =
     {
@@ -194,12 +234,16 @@ static int bmp280_write_reg(uint8_t reg, uint8_t value)
         value
     };
 
-    return hal_spi_write(
-        BARO_SPI_BUS,
-        tx,
-        2,
-        BARO_TIMEOUT_MS
-    );
+    if (hal_spi_write(
+            dev->bus,
+            tx,
+            2,
+            BMP280_SPI_TIMEOUT_MS) != 0)
+    {
+        return BMP280_ERR_BUS;
+    }
+
+    return BMP280_OK;
 }
 
 
@@ -255,7 +299,9 @@ static void bmp280_decode_calibration(
 /*
  * Validate calibration coefficients.
  *
- * T1 and P1 must be non-zero and not erased.
+ * A real BMP280 always has non-zero trim values.  All 0x00 (bus returned
+ * nothing) or all 0xFF (MISO floating) means the NVM read failed.  A partly
+ * read block (T1 valid, T2/T3 zero) collapses temperature to exactly 0.00 C.
  */
 
 static int bmp280_calib_valid(const bmp280_calib_t *c)
@@ -279,15 +325,16 @@ static int bmp280_calib_valid(const bmp280_calib_t *c)
 
 static int bmp280_read_calibration(bmp280_dev_t *dev)
 {
-    uint8_t calib_data[24];
+    uint8_t calib_data[BMP280_CALIB_LEN];
 
-    if (bmp280_read_regs(
-            BMP280_REG_CALIB,
-            calib_data,
-            sizeof(calib_data)) != 0)
-    {
-        return -1;
-    }
+    int ret = bmp280_read_regs(
+        dev,
+        BMP280_REG_CALIB,
+        calib_data,
+        sizeof(calib_data));
+
+    if (ret != BMP280_OK)
+        return ret;
 
     bmp280_decode_calibration(
         &dev->calib,
@@ -295,9 +342,9 @@ static int bmp280_read_calibration(bmp280_dev_t *dev)
     );
 
     if (!bmp280_calib_valid(&dev->calib))
-        return -2;
+        return BMP280_ERR_CALIB;
 
-    return 0;
+    return BMP280_OK;
 }
 
 
@@ -309,77 +356,66 @@ static int bmp280_read_calibration(bmp280_dev_t *dev)
  * Internal initialisation.
  *
  * Sequence:
- *   1. Reset sensor.
+ *   1. Release CS and let the sensor power up.
  *   2. Verify chip ID.
- *   3. Read calibration coefficients.
- *   4. Validate calibration.
- *   5. Configure IIR filter and oversampling.
+ *   3. Soft reset.
+ *   4. Read and validate calibration coefficients (retry once).
+ *   5. Configure IIR filter and oversampling, stay in sleep mode.
  */
 
-static int bmp280_init_device(bmp280_dev_t *dev)
+static int bmp280_init_device(bmp280_dev_t *dev, hal_spi_bus_t bus)
 {
-    uint8_t id;
-
-    if (dev == NULL)
-        return -1;
+    int ret;
 
     /* Ensure software state starts clean. */
+    dev->bus = bus;
     dev->t_fine = 0;
     dev->last_temp_centi = 0;
     dev->last_pressure_pa = 0;
+    dev->chip_id = 0;
 
+    /* Make sure CSB is idle high before the first transaction. */
+    hal_spi_set_cs(bus, false);
     delay_ms(BMP280_RESET_DELAY_MS);
 
     /* Verify BMP280 chip ID. */
-    if (bmp280_read_regs(BMP280_REG_ID, &id, 1) != 0)
-        return -2;
+    ret = bmp280_read_reg(dev, BMP280_REG_ID, &dev->chip_id);
+    if (ret != BMP280_OK)
+        return ret;
 
-    if (id != BMP280_CHIP_ID)
-        return -3;
+    if (dev->chip_id != BMP280_CHIP_ID)
+        return BMP280_ERR_CHIP_ID;
 
     /* Reset BMP280. */
-    if (bmp280_write_reg(
-            BMP280_REG_RESET,
-            BMP280_RESET_VALUE) != 0)
-    {
-        return -4;
-    }
+    ret = bmp280_write_reg(dev, BMP280_REG_RESET, BMP280_RESET_VALUE);
+    if (ret != BMP280_OK)
+        return ret;
 
     delay_ms(BMP280_RESET_DELAY_MS);
 
-    /* Read and validate calibration data. */
-    int ret = bmp280_read_calibration(dev);
-
     /*
-     * Retry once if calibration data is invalid.
+     * The first read can come back empty if the reset has not fully
+     * completed.  Retry once after the wake-up time before giving up.
      */
-    if (ret != 0)
+    ret = bmp280_read_calibration(dev);
+
+    if (ret != BMP280_OK)
     {
         delay_ms(BMP280_RESET_DELAY_MS);
 
         ret = bmp280_read_calibration(dev);
 
-        if (ret != 0)
-            return -5;
+        if (ret != BMP280_OK)
+            return ret;
     }
 
-    /* Configure IIR filter. */
-    if (bmp280_write_reg(
-            BMP280_REG_CONFIG,
-            BMP280_CONFIG_VALUE) != 0)
-    {
-        return -6;
-    }
+    /* Configure IIR filter.  Standby time is irrelevant in forced mode. */
+    ret = bmp280_write_reg(dev, BMP280_REG_CONFIG, BMP280_CONFIG_VALUE);
+    if (ret != BMP280_OK)
+        return ret;
 
     /* Configure oversampling and leave sensor in sleep mode. */
-    if (bmp280_write_reg(
-            BMP280_REG_CTRL_MEAS,
-            BMP280_CTRL_MEAS_SLEEP) != 0)
-    {
-        return -7;
-    }
-
-    return 0;
+    return bmp280_write_reg(dev, BMP280_REG_CTRL_MEAS, BMP280_CTRL_MEAS_SLEEP);
 }
 
 
@@ -388,77 +424,55 @@ static int bmp280_init_device(bmp280_dev_t *dev)
  * ========================================================================== */
 
 /*
- * Read raw pressure and temperature ADC values.
- *
- * Returns:
- *   0  - Success
- *  -1  - Communication error
- *  -2  - Measurement timeout
- *  -3  - Invalid ADC values
+ * Trigger a forced measurement and read raw pressure and temperature ADC
+ * values.
  */
 
 static int bmp280_read_raw(
+    bmp280_dev_t *dev,
     int32_t *adc_P,
     int32_t *adc_T)
 {
     uint8_t status;
     uint8_t pbuf[3];
     uint8_t tbuf[3];
+    int ret;
 
     uint32_t timeout = BMP280_POLL_TIMEOUT_MS;
 
-    if (adc_P == NULL || adc_T == NULL)
-        return -1;
-
     /* Start forced-mode measurement. */
-    if (bmp280_write_reg(
-            BMP280_REG_CTRL_MEAS,
-            BMP280_CTRL_MEAS_FORCED) != 0)
-    {
-        return -1;
-    }
+    ret = bmp280_write_reg(dev, BMP280_REG_CTRL_MEAS, BMP280_CTRL_MEAS_FORCED);
+    if (ret != BMP280_OK)
+        return ret;
 
     delay_ms(BMP280_MEASURE_DELAY_MS);
 
     /* Wait until measurement is complete. */
     for (;;)
     {
-        if (bmp280_read_regs(
-                BMP280_REG_STATUS,
-                &status,
-                1) != 0)
-        {
-            return -1;
-        }
+        ret = bmp280_read_reg(dev, BMP280_REG_STATUS, &status);
+        if (ret != BMP280_OK)
+            return ret;
 
         if ((status & BMP280_STATUS_MEASURING) == 0)
             break;
 
         if (timeout < BMP280_POLL_PERIOD_MS)
-            return -2;
+            return BMP280_ERR_TIMEOUT;
 
         delay_ms(BMP280_POLL_PERIOD_MS);
 
         timeout -= BMP280_POLL_PERIOD_MS;
     }
 
-    /* Read pressure ADC registers. */
-    if (bmp280_read_regs(
-            BMP280_REG_PRESS_MSB,
-            pbuf,
-            3) != 0)
-    {
-        return -1;
-    }
+    /* Read pressure and temperature ADC registers. */
+    ret = bmp280_read_regs(dev, BMP280_REG_PRESS_MSB, pbuf, 3);
+    if (ret != BMP280_OK)
+        return ret;
 
-    /* Read temperature ADC registers. */
-    if (bmp280_read_regs(
-            BMP280_REG_TEMP_MSB,
-            tbuf,
-            3) != 0)
-    {
-        return -1;
-    }
+    ret = bmp280_read_regs(dev, BMP280_REG_TEMP_MSB, tbuf, 3);
+    if (ret != BMP280_OK)
+        return ret;
 
     /* Reconstruct 20-bit ADC values. */
     *adc_P =
@@ -471,14 +485,17 @@ static int bmp280_read_raw(
         ((int32_t)tbuf[1] << 4) |
         ((int32_t)tbuf[2] >> 4);
 
-    /* Reject invalid ADC readings. */
-    if (*adc_P == 0 || *adc_P == 0xFFFFF ||
-        *adc_T == 0 || *adc_T == 0xFFFFF)
+    /*
+     * A dead bus reads back all 0x00 or all 0xFF.  Reject only when both
+     * raw values sit at an extreme; one extreme value alone can be real.
+     */
+    if ((*adc_P == 0 || *adc_P == 0xFFFFF) &&
+        (*adc_T == 0 || *adc_T == 0xFFFFF))
     {
-        return -3;
+        return BMP280_ERR_DATA;
     }
 
-    return 0;
+    return BMP280_OK;
 }
 
 
@@ -487,20 +504,17 @@ static int bmp280_read_raw(
  * ========================================================================== */
 
 /*
- * Convert raw ADC temperature and pressure readings into:
+ * Convert raw ADC readings into dev->last_temp_centi (0.01 C) and
+ * dev->last_pressure_pa (Pa).
  *
- *   temperature_c : degrees Celsius
- *   pressure_pa   : Pascals
- *
- * Uses the BMP280 integer compensation algorithm.
+ * Uses the BMP280 integer compensation algorithm.  64-bit values are only
+ * multiplied and shifted, never divided (see file header).
  */
 
 static int bmp280_compensate(
     bmp280_dev_t *dev,
     int32_t adc_P,
-    int32_t adc_T,
-    float *temperature_c,
-    float *pressure_pa)
+    int32_t adc_T)
 {
     int64_t v1_64;
     int64_t v2_64;
@@ -509,12 +523,8 @@ static int bmp280_compensate(
 
     int32_t var1;
     int32_t var2;
-    int32_t temp;
 
     uint32_t p;
-
-    if (dev == NULL)
-        return -1;
 
     /* ---------------------------------------------------------------------
      * TEMPERATURE COMPENSATION
@@ -548,12 +558,7 @@ static int bmp280_compensate(
     else if (temp_64 < INT32_MIN)
         temp_64 = INT32_MIN;
 
-    temp = (int32_t)temp_64;
-
-    dev->last_temp_centi = temp;
-
-    if (temperature_c != NULL)
-        *temperature_c = (float)temp / 100.0f;
+    dev->last_temp_centi = (int32_t)temp_64;
 
 
     /* ---------------------------------------------------------------------
@@ -585,34 +590,23 @@ static int bmp280_compensate(
 
     if (var1 == 0)
     {
-        return -2;
+        return BMP280_ERR_COMPENSATE;
     }
 
     /*
-     * Pressure intermediate calculation.
-     *
-     * Use a 64-bit intermediate to avoid signed 32-bit
-     * overflow during multiplication.
+     * Bosch reference arithmetic: the product may exceed INT32_MAX, so it is
+     * done in uint32_t (defined wrap-around), and the branches below handle
+     * values with the top bit set.
      */
+    p = (uint32_t)((int32_t)(1048576 - adc_P) - (var2 / 4096)) * 3125U;
 
-    int64_t pressure_intermediate =
-        ((int64_t)(1048576 - adc_P) -
-         ((int64_t)var2 / 4096)) * 3125;
-
-    if (pressure_intermediate < 0)
-        return -2;
-
-    if ((uint64_t)pressure_intermediate < 0x80000000ULL)
+    if (p < 0x80000000U)
     {
-        p = ((uint32_t)pressure_intermediate << 1) /
-            (uint32_t)var1;
+        p = (p << 1) / (uint32_t)var1;
     }
     else
     {
-        p = (uint32_t)pressure_intermediate /
-            (uint32_t)var1;
-
-        p *= 2U;
+        p = (p / (uint32_t)var1) * 2U;
     }
 
     var1 =
@@ -629,10 +623,7 @@ static int bmp280_compensate(
 
     dev->last_pressure_pa = p;
 
-    if (pressure_pa != NULL)
-        *pressure_pa = (float)p;
-
-    return 0;
+    return BMP280_OK;
 }
 
 
@@ -648,29 +639,17 @@ static int bmp280_compensate(
  *   3. Apply calibration compensation.
  */
 
-static int bmp280_read_measurement(
-    bmp280_dev_t *dev,
-    float *temperature_c,
-    float *pressure_pa)
+static int bmp280_read_measurement(bmp280_dev_t *dev)
 {
     int32_t adc_P;
     int32_t adc_T;
 
-    if (dev == NULL)
-        return -1;
+    int ret = bmp280_read_raw(dev, &adc_P, &adc_T);
 
-    int ret = bmp280_read_raw(&adc_P, &adc_T);
-
-    if (ret != 0)
+    if (ret != BMP280_OK)
         return ret;
 
-    return bmp280_compensate(
-        dev,
-        adc_P,
-        adc_T,
-        temperature_c,
-        pressure_pa
-    );
+    return bmp280_compensate(dev, adc_P, adc_T);
 }
 
 
@@ -679,24 +658,24 @@ static int bmp280_read_measurement(
  * ========================================================================== */
 
 /*
- * Initialise BMP280.
+ * Initialise BMP280 on the given SPI bus.
  *
  * Prerequisite:
- *   SPI2 must already be configured by the platform layer.
+ *   The bus must already be configured by the platform layer.
  */
 
-int bmp280_init(void)
+int bmp280_init(hal_spi_bus_t bus)
 {
     bmp280_ready = false;
 
-    int ret = bmp280_init_device(&bmp280_device);
+    int ret = bmp280_init_device(&bmp280_device, bus);
 
-    if (ret != 0)
+    if (ret != BMP280_OK)
         return ret;
 
     bmp280_ready = true;
 
-    return 0;
+    return BMP280_OK;
 }
 
 
@@ -708,18 +687,17 @@ int bmp280_init(void)
 int bmp280_update(void)
 {
     if (!bmp280_ready)
-        return -1;
+        return BMP280_ERR_NOT_READY;
+
+    int ret = bmp280_read_measurement(&bmp280_device);
+
+    if (ret != BMP280_OK)
+        return ret;
 
     barometer_data_t data = {0};
 
-    int ret = bmp280_read_measurement(
-        &bmp280_device,
-        &data.temperature_c,
-        &data.pressure_pa
-    );
-
-    if (ret != 0)
-        return ret;
+    data.temperature_centi_c = bmp280_device.last_temp_centi;
+    data.pressure_pa = bmp280_device.last_pressure_pa;
 
     /*
      * TODO:
@@ -735,6 +713,11 @@ int bmp280_update(void)
      */
     barometer_publish(&data);
 
-    return 0;
+    return BMP280_OK;
 }
 
+
+uint8_t bmp280_last_chip_id(void)
+{
+    return bmp280_device.chip_id;
+}

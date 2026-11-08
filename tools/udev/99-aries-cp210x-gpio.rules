@@ -1,0 +1,15 @@
+# ARIES v3 (THEJAS32) USB-UART bridge: Silicon Labs CP2102, 10c4:ea60.
+#
+# ~/vega-flasher/reset pulses the board into its xmodem loader by driving the
+# CP2102's GPIO pins through libgpiod (/dev/gpiochipN). Those device nodes are
+# root-only by default, which is why flasher.bat runs `sudo reset`.
+#
+# This rule gives the dialout group (which already owns /dev/ttyUSB*) access
+# to the CP2102's gpiochip only -- not the machine's other GPIO controllers.
+#
+# Install:
+#   sudo cp tools/udev/99-aries-cp210x-gpio.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   then unplug and replug the board.
+
+SUBSYSTEM=="gpio", KERNEL=="gpiochip*", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", GROUP="dialout", MODE="0660"

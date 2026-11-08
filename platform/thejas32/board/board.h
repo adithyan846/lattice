@@ -10,4 +10,14 @@
 #define BOARD_I2C_IMU_BUS    HAL_I2C_BUS_0
 #define BOARD_SPI_FLASH_BUS  HAL_SPI_BUS_0
 
-void board_init(void);
+/* LSM6DSO on header J7: SPI1CLK / SPI1MOSI / SPI1MISO / SPI1CSN (CS0) */
+#define BOARD_SPI_IMU_BUS    HAL_SPI_BUS_1
+
+/* BMP280 on header J4: SPI2CLK / SPI2MOSI / SPI2MISO / SPI2CSN (CS0) */
+#define BOARD_SPI_BARO_BUS   HAL_SPI_BUS_2
+
+/*
+ * Bring up board GPIO and the sensor SPI buses.
+ * Returns 0 on success, or the first negative HAL error.
+ */
+int board_init(void);

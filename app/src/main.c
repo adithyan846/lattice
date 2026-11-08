@@ -1,31 +1,28 @@
 /***********************************************************************************
  * FILE ID         : main.c
- * VERSION         : 1.0.0
+ * VERSION         : 1.1.0
  * PROJECT         : LATTICE - ARIES V3
- * DESCRIPTION     : Barometer application using BMP280 via barometer interface
+ * DESCRIPTION     : Barometer + IMU application (BMP280, LSM6DSO) via sensor interfaces
  ***********************************************************************************/
 
 #include "hal_gpio.h"
 #include "hal_timer.h"
 #include "hal_uart.h"
-#include "hal_spi.h"
 #include "barometer.h"
+#include "bmp280.h"
+#include "imu.h"
+#include "lsm6dso.h"
 #include "board.h"
 #include <stdio.h>
 #include <string.h>
 
 /* ============================================================================
- * BAROMETER SPI CONFIGURATION
+ * APPLICATION CONFIGURATION
  * ========================================================================== */
 
-#define BARO_SPI_BUS            HAL_SPI_BUS_2
-#define BARO_CS_MODE            HAL_SPI_CS_MODE_CSAAT
-#define BARO_HW_CS              HAL_SPI_CS_HW_0
-#define BARO_BAUD_DIV           HAL_SPI_BAUD_DIV_32
-#define BARO_TIMEOUT_MS         100
-
 #define LED_PIN                 BOARD_LED_RED_PIN
-#define UART_BAUD               115200
+#define LOOP_PERIOD_MS          500
+#define IMU_RETRY_LOOPS         6       /* retry a failed IMU init every ~3 s */
 
 /* ============================================================================
  * UART PRINT HELPERS
@@ -66,57 +63,85 @@ static void uart_print_u32(uint32_t v)
     while (i--) hal_uart_write(HAL_UART_0, (const uint8_t *)&buf[i], 1);
 }
 
-static void uart_print_float(float f)
+static void uart_print_hex8(uint8_t v)
 {
-    int32_t ipart = (int32_t)f;
-    float fpart = f - (float)ipart;
-    if (fpart < 0) fpart = -fpart;
-    uart_print_int(ipart);
-    uart_print(".");
-    uart_print_int((int32_t)(fpart * 100.0f + 0.5f));
+    static const char hex[] = "0123456789ABCDEF";
+    char text[2] = { hex[(v >> 4) & 0x0F], hex[v & 0x0F] };
+    hal_uart_write(HAL_UART_0, (const uint8_t *)text, 2);
+}
+
+/* Print three milli-unit values with two decimals (e.g. 1234 -> 1.23). */
+static void uart_print_milli3(const char *label, const int32_t v[3])
+{
+    static const char axis[3] = { 'X', 'Y', 'Z' };
+
+    uart_print(label);
+    for (int i = 0; i < 3; i++) {
+        char name[4] = { ' ', axis[i], '=', '\0' };
+        uart_print(name);
+        uart_print_centi(v[i] / 10);
+    }
 }
 
 /* ============================================================================
  * APPLICATION INITIALISATION
  * ========================================================================== */
 
+static bool baro_ok = false;
+static bool imu_ok = false;
+
+static void imu_try_init(void)
+{
+    int ret = imu_init();
+    if (ret != 0) {
+        uart_print("ERROR: IMU init failed (code ");
+        uart_print_int(ret);
+        uart_print(", WHO_AM_I 0x");
+        uart_print_hex8(lsm6dso_last_who_am_i());
+        uart_print(", expected 0x6C)\r\n");
+    } else {
+        imu_ok = true;
+        uart_print("IMU ready: 1666 Hz, +/-16 g, +/-2000 dps\r\n");
+    }
+}
+
 static void app_init(void)
 {
-    /* Initialize hardware */
-    hal_gpio_init();
-    board_init();
+    int ret;
 
-    /* Initialize UART for console output */
+    /* GPIO and sensor SPI buses (SPI1 = IMU, SPI2 = barometer) */
+    ret = board_init();
+    if (ret != 0) {
+        uart_print("ERROR: board init failed (code ");
+        uart_print_int(ret);
+        uart_print(")\r\n");
+        return;
+    }
+
+    /* UART_0 is already running at 115200 from the bootloader */
     hal_uart_config_t ucfg = {
-        .baud_rate = UART_BAUD,
+        .baud_rate = 115200,
         .data_bits = 8,
         .stop_bits = 1,
         .parity = false
     };
     hal_uart_init(HAL_UART_0, &ucfg);
 
-    /* Initialize SPI for barometer */
-    hal_spi_config_t scfg = {
-        .mode = HAL_SPI_MODE_3,
-        .freq_hz = 0,
-        .baud_div = BARO_BAUD_DIV,
-        .bit_order = HAL_SPI_BIT_ORDER_MSB,
-        .cs_mode = BARO_CS_MODE,
-        .hw_cs = BARO_HW_CS,
-        .word_size = 8
-    };
-    hal_spi_init(BARO_SPI_BUS, &scfg);
+    uart_print("\r\nLattice: BMP280 (SPI2/J4) + LSM6DSO (SPI1/J7)\r\n");
 
-    /* Initialize barometer interface */
-    int ret = barometer_init();
+    ret = barometer_init();
     if (ret != 0) {
-        uart_print("ERROR: Barometer init failed (code ");
+        uart_print("ERROR: barometer init failed (code ");
         uart_print_int(ret);
-        uart_print(")\r\n");
-        return;
+        uart_print(", chip ID 0x");
+        uart_print_hex8(bmp280_last_chip_id());
+        uart_print(", expected 0x58)\r\n");
+    } else {
+        baro_ok = true;
+        uart_print("Barometer ready: forced mode, temp x2, pressure x16, IIR x16\r\n");
     }
 
-    uart_print("Barometer ready\r\n");
+    imu_try_init();
 }
 
 /* ============================================================================
@@ -125,21 +150,49 @@ static void app_init(void)
 
 static void app_update(void)
 {
-    barometer_data_t data;
+    int ret;
 
-    /* Trigger measurement and get latest data */
-    int ret = barometer_update();
-    if (ret != 0) {
-        return;
+    if (baro_ok) {
+        barometer_data_t baro;
+
+        ret = barometer_update();
+        if (ret != 0) {
+            uart_print("ERROR: barometer read failed (code ");
+            uart_print_int(ret);
+            uart_print(")\r\n");
+        } else if (barometer_get_latest(&baro)) {
+            uart_print("temp=");
+            uart_print_centi(baro.temperature_centi_c);
+            uart_print(" C  pressure=");
+            uart_print_u32(baro.pressure_pa);
+            uart_print(" Pa  altitude=");
+            uart_print_int(baro.altitude_cm);
+            uart_print(" cm\r\n");
+        }
     }
 
-    /* Get latest measurement */
-    if (barometer_get_latest(&data)) {
-        uart_print("temp=");
-        uart_print_centi((int32_t)(data.temperature_c * 100));
-        uart_print(" C  pressure=");
-        uart_print_u32((uint32_t)data.pressure_pa);
-        uart_print(" Pa\r\n");
+    if (!imu_ok) {
+        static uint32_t retry_count = 0;
+
+        if (++retry_count >= IMU_RETRY_LOOPS) {
+            retry_count = 0;
+            imu_try_init();
+        }
+    }
+
+    if (imu_ok) {
+        imu_data_t imu;
+
+        ret = imu_update();
+        if (ret < 0) {
+            uart_print("ERROR: IMU read failed (code ");
+            uart_print_int(ret);
+            uart_print(")\r\n");
+        } else if (imu_get_latest(&imu)) {
+            uart_print_milli3("gyro[dps]", imu.gyro_mdps);
+            uart_print_milli3(" | accel[g]", imu.accel_mg);
+            uart_print("\r\n");
+        }
     }
 }
 
@@ -149,19 +202,21 @@ static void app_update(void)
 
 int main(void)
 {
+    bool led_on = false;
+
     app_init();
 
     while (1) {
         app_update();
 
-        /* Blink LED */
-        hal_gpio_write(LED_PIN, HAL_GPIO_LEVEL_HIGH);
-        uart_print("LED ON\r\n");
-        hal_timer_delay_ms(500);
-
-        hal_gpio_write(LED_PIN, HAL_GPIO_LEVEL_LOW);
-        uart_print("LED OFF\r\n");
-        hal_timer_delay_ms(500);
+        /*
+         * Heartbeat LED.  State is tracked here rather than with
+         * hal_gpio_toggle(): the BSP's GPIO_read_pin() switches the pin to
+         * input, which would leave the LED floating.
+         */
+        led_on = !led_on;
+        hal_gpio_write(LED_PIN, led_on ? HAL_GPIO_LEVEL_HIGH : HAL_GPIO_LEVEL_LOW);
+        hal_timer_delay_ms(LOOP_PERIOD_MS);
     }
 
     return 0;

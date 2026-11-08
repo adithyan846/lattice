@@ -37,7 +37,16 @@ CROSS_COMPILE     ?= riscv32-vega-elf
 VEGA_TOOLS        ?= $(HOME)/vega-tools
 # Either point directly at .../toolchain/bin, or let it be derived from the
 # VEGA_TOOLS root above.
-TOOLCHAIN_BIN     ?= $(VEGA_TOOLS)/bin
+# Use the first location that actually has $(CROSS_COMPILE)-gcc. The Arduino
+# "vega" board package ships a working rv32 toolchain; ~/vega-tools may only
+# hold the riscv64 one, which cannot link rv32 firmware.
+TOOLCHAIN_BIN_CANDIDATES := \
+  $(VEGA_TOOLS)/bin \
+  $(VEGA_TOOLS)/toolchain/bin \
+  $(HOME)/.arduino15/packages/vega/tools/riscv32-vega-elf-gcc/002/bin
+TOOLCHAIN_BIN     ?= $(firstword \
+  $(foreach d,$(TOOLCHAIN_BIN_CANDIDATES),$(if $(wildcard $(d)/$(CROSS_COMPILE)-gcc),$(d))) \
+  $(VEGA_TOOLS)/bin)
 TOOLCHAIN_PREFIX  ?= $(VEGA_TOOLS)/
 
 CC       := $(TOOLCHAIN_BIN)/$(CROSS_COMPILE)-gcc
@@ -107,7 +116,9 @@ LATTICE_INCLUDES := \
 	-I$(ROOT)/app/include \
 	-I$(ROOT)/core/include \
 	-I$(ROOT)/devices/bmp280 \
+	-I$(ROOT)/devices/lsm6dso \
 	-I$(ROOT)/interfaces/barometer \
+	-I$(ROOT)/interfaces/imu \
 	-I$(ROOT)/hal/include \
 	-I$(ROOT)/utils/include \
 	-I$(ROOT)/platform/thejas32 \
@@ -152,7 +163,9 @@ C_SOURCES := \
   $(BSP)/drivers/uart/debug_uart.c \
   $(BSP)/drivers/uart/uart.c \
   $(ROOT)/interfaces/barometer/barometer.c \
+  $(ROOT)/interfaces/imu/imu.c \
   $(ROOT)/devices/bmp280/bmp280.c \
+  $(ROOT)/devices/lsm6dso/lsm6dso.c \
   $(FREERTOS)/tasks.c \
   $(FREERTOS)/list.c \
   $(FREERTOS)/queue.c \
@@ -177,7 +190,7 @@ OBJECTS := $(addprefix $(BUILD_DIR)/,$(C_SOURCES:.c=.o)) \
 # Include order matters: the BSP ships its own stdlib.h / printf which must
 # shadow newlib, exactly as the Eclipse build had them ordered.
 INCLUDES := \
-  -I$(LATTICE_INCLUDES) \
+  $(LATTICE_INCLUDES) \
   -I$(FREERTOS_DIR) \
   -I$(DEMO) \
   -I$(FREERTOS_DIR)/Demo/Common/include \
@@ -229,7 +242,19 @@ LDLIBS := -Wl,--start-group -lgcc -lc -lm -Wl,--end-group
 # Flash configuration (ARIES / THEJAS32 board)
 # ---------------------------------------------------------------------------
 SERIAL_PORT ?= /dev/ttyUSB0
-FLASH_TOOL  ?= $(HOME)/flasher/vega-flasher/xmodemflasher
+# flasher.bat pulses the board into its loader (sudo reset) and then runs
+# xmodemflasher, so no RESET press is needed. It asks for the sudo password.
+FLASH_TOOL_CANDIDATES := \
+  $(HOME)/vega-flasher/flasher.bat \
+  $(HOME)/flasher/vega-flasher/flasher.bat
+FLASH_TOOL  ?= $(firstword $(wildcard $(FLASH_TOOL_CANDIDATES)) \
+  $(HOME)/vega-flasher/flasher.bat)
+
+# flasher.bat's two steps, so they can run without sudo once
+# tools/udev/99-aries-cp210x-gpio.rules is installed.
+FLASH_DIR   := $(dir $(FLASH_TOOL))
+FLASH_RESET := $(FLASH_DIR)reset
+FLASH_XMODEM := $(FLASH_DIR)xmodemflasher
 FLASH_BAUD  ?= 115200
 
 # Serial console used by `make monitor`.
@@ -256,6 +281,8 @@ endif
 # Rules
 # ---------------------------------------------------------------------------
 .PHONY: all build clean distclean flash run monitor size disasm info help check-toolchain check-serial
+.DEFAULT_GOAL := all
+
 .PHONY: sources
 
 sources:
@@ -356,12 +383,17 @@ flash: $(BIN) check-serial
 	@echo "  FLASH  $(BIN) -> $(SERIAL_PORT)"
 	@if [ ! -x "$(FLASH_TOOL)" ]; then \
 	    echo "error: flash tool not found/executable: $(FLASH_TOOL)"; \
-	    echo "       set FLASH_TOOL=/path/to/xmodemflasher"; \
+	    echo "       set FLASH_TOOL=/path/to/vega-flasher/flasher.bat"; \
 	    exit 1; \
 	fi
-	@echo "  Press the RESET button on the ARIES board now if it does not"
-	@echo "  auto-enter the loader."
-	@$(FLASH_TOOL) $(SERIAL_PORT) $(BIN)
+	@if [ -x "$(FLASH_RESET)" ] && "$(FLASH_RESET)" >/dev/null 2>&1; then \
+	    echo "  RESET  board put into loader (no sudo)"; \
+	    "$(FLASH_XMODEM)" $(SERIAL_PORT) $(BIN); \
+	else \
+	    echo "  RESET  needs root - running $(notdir $(FLASH_TOOL)) (sudo)."; \
+	    echo "         Install tools/udev/99-aries-cp210x-gpio.rules to skip the password."; \
+	    $(FLASH_TOOL) $(SERIAL_PORT) $(BIN); \
+	fi
 
 run: flash
 

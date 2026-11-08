@@ -18,7 +18,7 @@ static bool g_bus_initialized[HAL_SPI_BUS_COUNT] = {false};
 static SemaphoreHandle_t g_bus_mutex[HAL_SPI_BUS_COUNT];
 
 static void build_control_reg(const hal_spi_config_t *cfg, SPIcntrlRegType *ctrl) {
-    ctrl->Bits.PeriphChipSelect = 0;
+    ctrl->Bits.PeriphChipSelect = (cfg->cs_mode == HAL_SPI_CS_MODE_CSAAT) ? cfg->hw_cs : 0;
     ctrl->Bits.PeriphType = 0;
     ctrl->Bits.DataOrder = (cfg->bit_order == HAL_SPI_BIT_ORDER_LSB) ? 1 : 0;
     ctrl->Bits.Mode = cfg->mode;
