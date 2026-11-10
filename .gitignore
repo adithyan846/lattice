@@ -1,4 +1,5 @@
 # Build directories
+drivers/
 build/
 freertos-thejas32/build/
 app/build/

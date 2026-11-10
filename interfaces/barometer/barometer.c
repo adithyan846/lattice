@@ -19,12 +19,14 @@ static bool data_available = false;
 
 int barometer_init(void)
 {
-    return bmp280_init();
+    return bmp280_begin(&bmp280_device, BMP280_OSRS_2X, BMP280_OSRS_16X, BMP280_FILTER_16, BMP280_MODE_FORCED);
 }
 
 int barometer_update(void)
 {
-    return bmp280_update();
+    bmp280_data_t data;
+    int ret = bmp280_measure(&bmp280_device, &data);
+    return ret;
 }
 
 void barometer_publish(const barometer_data_t *data)
