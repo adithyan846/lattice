@@ -13,7 +13,9 @@
 #include "imu.h"
 #include "lsm6dso.h"
 #include "board.h"
+#include "timer.h"          /* TIMER TEST: raw TIMER_2 register */
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
 
 /* ============================================================================
@@ -196,6 +198,50 @@ static void app_update(void)
     }
 }
 
+
+/* ============================================================================
+ * MATH TEST: is 64-bit division correct on this build?
+ * The operands are volatile so the compiler can't work the answer out
+ * at build time - the board itself has to do the division.
+ * ========================================================================== */
+static void math_test_line(const char *name, uint32_t got, uint32_t want)
+{
+    uart_print(got == want ? "  PASS  " : "  FAIL  ");
+    uart_print(name);
+    uart_print("  got=");
+    uart_print_u32(got);
+    uart_print("  want=");
+    uart_print_u32(want);
+    uart_print("\r\n");
+}
+
+static void math_test(void)
+{
+    volatile uint32_t a32 = 4310000U, b32 = 1000U;
+    volatile uint64_t a64 = 4310000ULL, b64 = 1000ULL;
+    volatile uint64_t big = 10000000000ULL;            /* 1e10, needs 64 bits */
+    volatile int64_t  s_num = -(10LL << 16);           /* -10.0 in Q16.16 */
+    volatile int32_t  fa = 10 << 16, fb = 4 << 16;     /* 10.0 and 4.0    */
+
+    uart_print("\r\nMATH TEST\r\n");
+    math_test_line("u32 4310000/1000      ", a32 / b32, 4310U);
+    math_test_line("u64 4310000/1000      ", (uint32_t)(a64 / b64), 4310U);
+    math_test_line("u64 1e10/1000         ", (uint32_t)(big / b64), 10000000U);
+    math_test_line("u64 1e10%1000         ", (uint32_t)(big % b64), 0U);
+    math_test_line("s64 -10.0/4 (Q16,neg) ", (uint32_t)(-(int32_t)(s_num / 4)), 163840U);
+    /* exactly what fix16_div does: ((int64)a << 16) / b  -> 10/4 = 2.5 */
+    math_test_line("fix16_div 10.0/4.0    ",
+                   (uint32_t)((((int64_t)fa) << 16) / (int64_t)fb), 163840U);
+    /* soft-float (no FPU): also done by libgcc helpers */
+    {
+        volatile float fa = 10.0f, fb = 4.0f;
+        math_test_line("float 10*4            ", (uint32_t)(fa * fb), 40U);
+        math_test_line("float 10/4 x1000      ", (uint32_t)(fa / fb * 1000.0f), 2500U);
+        math_test_line("float 10-4.5 x10      ", (uint32_t)((fa - 4.5f) * 10.0f), 55U);
+    }
+    uart_print("END MATH TEST\r\n\r\n");
+}
+
 /* ============================================================================
  * MAIN
  * ========================================================================== */
@@ -205,6 +251,9 @@ int main(void)
     bool led_on = false;
 
     app_init();
+    math_test();                                  /* MATH TEST */
+
+    uint32_t prev_us = hal_time_us();             /* TIMER TEST */
 
     while (1) {
         app_update();
@@ -217,6 +266,22 @@ int main(void)
         led_on = !led_on;
         hal_gpio_write(LED_PIN, led_on ? HAL_GPIO_LEVEL_HIGH : HAL_GPIO_LEVEL_LOW);
         hal_timer_delay_ms(LOOP_PERIOD_MS);
+
+        /* TIMER TEST (diagnostic): raw counter + time worked out two ways */
+        uint32_t raw    = Timer(TIMER_2).CurrentValue;
+        uint32_t now_us = hal_time_us();
+        uint32_t ms_a   = now_us / 1000U;              /* 32-bit divide        */
+        uint32_t ms_b   = (uint32_t)hal_time_ms();     /* 64-bit divide        */
+        uart_print("loop_us=");
+        uart_print_u32(now_us - prev_us);
+        uart_print("  us/1000=");
+        uart_print_u32(ms_a);
+        uart_print("  time_ms=");
+        uart_print_u32(ms_b);
+        uart_print("  raw=");
+        uart_print_u32(raw);
+        uart_print("\r\n");
+        prev_us = now_us;
     }
 
     return 0;

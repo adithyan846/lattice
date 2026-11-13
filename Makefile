@@ -100,10 +100,12 @@ LATTICE_SRCS := \
 	$(wildcard interfaces/*.c) \
 	$(wildcard hal/*.c) \
 	$(wildcard utils/*.c) \
+	$(wildcard control/*.c) \
 	platform/thejas32/board/board.c \
 	platform/thejas32/gpio.c \
 	platform/thejas32/timer.c \
-	platform/thejas32/uart.c
+	platform/thejas32/uart.c \
+	platform/thejas32/div64.c
 
 # Select SPI HAL based on build mode
 ifeq ($(WITH_FREERTOS),1)
@@ -117,6 +119,7 @@ LATTICE_INCLUDES := \
 	-I$(ROOT)/core/include \
 	-I$(ROOT)/devices/bmp280 \
 	-I$(ROOT)/devices/lsm6dso \
+	-I$(ROOT)/control \
 	-I$(ROOT)/interfaces/barometer \
 	-I$(ROOT)/interfaces/imu \
 	-I$(ROOT)/hal/include \
